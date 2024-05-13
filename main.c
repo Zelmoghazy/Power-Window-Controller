@@ -1,6 +1,8 @@
 #include "TM4C123GH6PM.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
+#include "queue.h"
 
 #include "stdint.h"
 #include "math.h"
@@ -23,8 +25,20 @@ void vApplicationMallocFailedHook( void );
 void vApplicationIdleHook( void );
 void vApplicationTickHook( void );
 
-void vTask1( void *pvParameters );
-void vTask2( void *pvParameters );
+void Input_Handler_Task( void *pvParameters );
+void Event_Handler_Task( void *pvParameters );
+
+typedef enum {
+		event_1,
+		event_2,
+		event_3,
+		event_4,
+		event_5,
+		event_6,
+		event_7
+}event_t;
+
+static QueueHandle_t event_queue;
 
 void UART_Init(uint32_t baudrate)
 {
@@ -179,28 +193,91 @@ void Interrupt_Config(void)
 #define mainDELAY_LOOP_COUNT		( 0xfffff )
 
 /* The task functions. */
-void vTask1( void *pvParameters );
-void vTask2( void *pvParameters );
+void Input_Handler_Task( void *pvParameters );
+void Event_Handler_Task( void *pvParameters );
 
 
-void vTask1( void *pvParameters )
+void Input_Handler_Task( void *pvParameters )
 {
 	/* As per most tasks, this task is implemented in an infinite loop. */
 	for( ;; )
 	{
-		vPrintString("Blue \n\r");
-		GPIOF->DATA ^= BLUE;
+		char ch = read_char();
+		print_char(ch);
+		event_t event;
+		
+		switch(ch){
+			case 'a':
+				event = event_1;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			case 'b':
+				event = event_2;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			case 'c':
+				event = event_3;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			case 'd':
+				event = event_4;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			case 'e':
+				event = event_5;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			case 'f':
+				event = event_6;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;
+			default:
+				event = event_7;
+				if(xQueueSend(event_queue,(void *) &event,0) != pdPASS) vPrintString("error\n");
+				break;					
+		}
+
+		// vPrintString("Blue \n\r");
+		// GPIOF->DATA ^= BLUE;
 	}
 }
 /*-----------------------------------------------------------*/
 
-void vTask2( void *pvParameters )
+void Event_Handler_Task( void *pvParameters )
 {
-	/* As per most tasks, this task is implemented in an infinite loop. */
+	event_t event;
+
 	for( ;; )
 	{
-		vPrintString("Red \n\r");
-		GPIOF->DATA ^= RED;
+		if(xQueueReceive(event_queue,&event,portMAX_DELAY) == pdPASS)
+		{
+			switch(event)
+			{
+				case event_1:
+					GPIOF->DATA = RED;
+					break;
+				case event_2:
+					GPIOF->DATA = GREEN;
+					break;
+				case event_3:
+					GPIOF->DATA = BLUE;
+					break;
+				case event_4:
+					GPIOF->DATA = RED|GREEN;
+					break;
+				case event_5:
+					GPIOF->DATA = GREEN|BLUE;
+					break;
+				case event_6:
+					GPIOF->DATA = RED|BLUE;
+					break;
+				default:
+					GPIOF->DATA  = RED|GREEN|BLUE;
+				 break;
+			}
+		}
+		//vPrintString("Red \n\r");
+		//GPIOF->DATA ^= RED;
 	}
 }
 /*-----------------------------------------------------------*/
@@ -212,10 +289,12 @@ int main(void)
 	UART_Init(115200);
 	Interrupt_Config();
 
+	
+	event_queue = xQueueCreate(10,sizeof(event_t));
 
-	xTaskCreate(vTask1, "Task 1", 200, NULL, 1,	NULL );	
+	xTaskCreate(Input_Handler_Task, "Input Handler", 200, NULL, 1,	NULL );	
 
-	xTaskCreate(vTask2, "Task 2", 200, NULL, 1, NULL );
+	xTaskCreate(Event_Handler_Task, "Event Handler", 200, NULL, 2, NULL );
 
 	vTaskStartScheduler();
 	
@@ -239,4 +318,3 @@ void vApplicationTickHook( void )
 {
 
 }
-
