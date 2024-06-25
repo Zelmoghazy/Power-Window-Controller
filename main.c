@@ -10,25 +10,40 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define RED   0x02
-#define BLUE  0x04
-#define GREEN 0x08
+#define RED                             0x02
+#define BLUE                            0x04
+#define GREEN                           0x08
 
+#define CONCAT_AUX(a, b) a##b
+#define CONCAT(a, b) CONCAT_AUX(a, b)
 
-
+/* UART */
 #define FIFO_TX_FULL()                  ((UART0->FR & (1 << 5)) == 1)		// if bit 5 is 1 -> tx fifo is full
 #define FIFO_RX_EMPTY()                 ((UART0->FR & (1 << 4)) == 1)		// if bit 4 is 1 -> rx fifo is empty
 
-#define GPIO_READ_PIN(PORT,PIN)         (((GPIO##PORT->DATA)>>PIN)&1U)
-#define GPIO_SET_PIN(PORT,PIN)          ((GPIO##PORT->DATA)|=1<<PIN)
-#define GPIO_CLEAR_PIN(PORT,PIN)        ((GPIO##PORT->DATA)&=~(1<<PIN))
-#define GPIO_TOGGLE_PIN(PORT,PIN)       ((GPIO##PORT->DATA)|=1<<PIN)
+/* GPIO */
+#define INPUT_PORT                      B
+#define OUTPUT_PORT                     C
 
-#define GPIO_READ_PORT(PORT)            ((GPIO##PORT->DATA))
-#define GPIO_WRITE_PORT(PORT,VALUE)     ((GPIO##PORT->DATA)=VALUE)
+#define GPIO_READ_PIN(PORT,PIN)         (((CONCAT(GPIO,PORT->DATA))>>PIN)&1U)
+#define GPIO_SET_PIN(PORT,PIN)          ((CONCAT(GPIO,PORT->DATA))|=1<<PIN)
+#define GPIO_CLEAR_PIN(PORT,PIN)        ((CONCAT(GPIO,PORT->DATA))&=~(1<<PIN))
+#define GPIO_TOGGLE_PIN(PORT,PIN)       ((CONCAT(GPIO,PORT->DATA))|=1<<PIN)
+
+#define GPIO_READ_PORT(PORT)            ((CONCAT(GPIO,PORT->DATA)))
+#define GPIO_WRITE_PORT(PORT,VALUE)     ((CONCAT(GPIO,PORT->DATA))=VALUE)
 
 #define READ_BIT(DATA,BIT)              (((DATA)>>BIT)&1U)
 
+/* MOTOR */
+#define MOTOR_CLOCKWISE_PIN             4
+#define MOTOR_COUNTER_CLOCKWISE_PIN     5
+
+#define MOTOR_CLOCKWISE()               GPIO_SET_PIN(OUTPUT_PORT,MOTOR_CLOCKWISE_PIN);GPIO_CLEAR_PIN(OUTPUT_PORT,MOTOR_COUNTER_CLOCKWISE_PIN)
+#define MOTOR_COUNTER_CLOCKWISE()       GPIO_SET_PIN(OUTPUT_PORT,MOTOR_COUNTER_CLOCKWISE_PIN);GPIO_CLEAR_PIN(OUTPUT_PORT,MOTOR_CLOCKWISE_PIN)
+#define MOTOR_STOP()                    GPIO_CLEAR_PIN(OUTPUT_PORT,MOTOR_COUNTER_CLOCKWISE_PIN);GPIO_CLEAR_PIN(OUTPUT_PORT,MOTOR_CLOCKWISE_PIN)
+
+/* INPUTS */
 #define PASS_UP_PIN                     0
 #define PASS_DOWN_PIN                   1
 #define DRIVER_UP_PIN                   2
@@ -38,32 +53,74 @@
 #define JAM_PIN                         6
 #define LOCK_ON_PIN                     7
 
+#define PASS_DOWN_PRESSED               (!GPIO_READ_PIN(INPUT_PORT, PASS_DOWN_PIN)) 
+#define PASS_UP_PRESSED                 (!GPIO_READ_PIN(INPUT_PORT, PASS_UP_PIN))
+#define DRIVER_UP_PRESSED               (!GPIO_READ_PIN(INPUT_PORT, DRIVER_UP_PIN))
+#define DRIVER_DOWN_PRESSED             (!GPIO_READ_PIN(INPUT_PORT, DRIVER_DOWN_PIN))
+#define LIMIT_UP_PRESSED                (!GPIO_READ_PIN(INPUT_PORT, LIMIT_UP_PIN))
+#define LIMIT_DOWN_PRESSED              (!GPIO_READ_PIN(INPUT_PORT, LIMIT_DOWN_PIN))
+#define JAM_PRESSED                     (!GPIO_READ_PIN(INPUT_PORT, JAM_PIN))
+#define LOCK_ON_PRESSED                 (!GPIO_READ_PIN(INPUT_PORT, LOCK_ON_PIN))
 
-#define PASS_DOWN_PRESSED              !GPIO_READ_PIN(B, PASS_DOWN_PIN) 
-#define PASS_UP_PRESSED                !GPIO_READ_PIN(B, PASS_UP_PIN)
-#define DRIVER_UP_PRESSED              !GPIO_READ_PIN(B, DRIVER_UP_PIN)
-#define DRIVER_DOWN_PRESSED            !GPIO_READ_PIN(B, DRIVER_DOWN_PIN)
-#define JAM_PRESSED                    !GPIO_READ_PIN(B, JAM_PIN)
-#define LOCK_ON_PRESSED                (!GPIO_READ_PIN(B, LOCK_ON_PIN))
+#define PASS_DOWN_MANUAL_COND           (PASS_DOWN_PRESSED && !(DRIVER_UP_PRESSED || DRIVER_DOWN_PRESSED || LIMIT_DOWN_PRESSED || LOCK_ON_PRESSED) && !emergency)
+#define PASS_DOWN_AUTO_COND             (!(DRIVER_UP_PRESSED || DRIVER_DOWN_PRESSED || PASS_UP_PRESSED || LIMIT_DOWN_PRESSED || LOCK_ON_PRESSED) && !emergency)
+#define PASS_UP_MANUAL_COND             (PASS_UP_PRESSED && !(DRIVER_UP_PRESSED || DRIVER_DOWN_PRESSED || LIMIT_UP_PRESSED || LOCK_ON_PRESSED) && !emergency)
+#define PASS_UP_AUTO_COND               (!(DRIVER_UP_PRESSED || DRIVER_DOWN_PRESSED || PASS_DOWN_PRESSED || LIMIT_UP_PRESSED || LOCK_ON_PRESSED) && !emergency)
+#define DRIVER_DOWN_MANUAL_COND         (DRIVER_DOWN_PRESSED && !(LIMIT_DOWN_PRESSED) && !emergency)
+#define DRIVER_DOWN_AUTO_COND           (!(LIMIT_DOWN_PRESSED || DRIVER_UP_PRESSED) && !emergency)
+#define DRIVER_UP_MANUAL_COND           (DRIVER_UP_PRESSED && !(LIMIT_UP_PRESSED) && !emergency)
+#define DRIVER_UP_AUTO_COND             (!(LIMIT_UP_PRESSED || DRIVER_DOWN_PRESSED) && !emergency)
 
-#define NO_INPUT                       (GPIO_READ_PORT(B) == 0xFF)
-#define PASS_DOWN_ONLY                 (GPIO_READ_PORT(B) == 0xFE)
-#define PASS_UP_ONLY                   (GPIO_READ_PORT(B) == 0xFD)
+/* TIMERS */
+#define PASS_DOWN_TIMER                0
+#define PASS_UP_TIMER                  1
+#define DRIVER_UP_TIMER                2
+#define DRIVER_DOWN_TIMER              3
 
-#define DOWN_TIMER                      0
-#define UP_TIMER                        1
+#define mainONE_SHOT_TIMER_PERIOD      200
+#define MAX_BUFFER_SIZE                256
 
-#define mainONE_SHOT_TIMER_PERIOD       pdMS_TO_TICKS( 3333 )
+char emergency = 0;
+char buffer[MAX_BUFFER_SIZE];
 
 static QueueHandle_t event_queue;
 TimerHandle_t xOneShotTimer;
+xSemaphoreHandle Emergency_Semaphore;
 
-char buffer[256];
+typedef enum {
+    PASS_DOWN_BUTTON,
+    PASS_UP_BUTTON,
+    DRIVER_UP_BUTTON,
+    DRIVER_DOWN_BUTTON,
+    LIMIT_UP_BUTTON,
+    LIMIT_DOWN_BUTTON,
+    LOCK_ON,
+    LOCK_OFF,
+    JAM
+} signal_t;
 
-uint8_t debounce(uint8_t current);
+typedef enum {
+    NO_FLAG,
+    AUTOMATIC_FLAG = 2,
+    MANUAL_FLAG   
+} flag_t;
+
+typedef struct{
+    signal_t    sig;
+    flag_t      flag;
+}event_t;
+
+typedef enum {
+    NEUTRAL,
+    PASS_DOWN,
+    PASS_UP,
+    DRIVER_DOWN,
+    DRIVER_UP,
+    EMERGENCY
+} state_t;
 
 void gpio_init(void);
-void gpiof_handler(void);
+void GPIOB_Handler(void); 
 void interrupt_config(void);
 
 void uart_init(uint32_t baudrate);
@@ -78,49 +135,10 @@ void vApplicationTickHook(void);
 
 void Input_Handler_Task(void *pvParameters);
 void Event_Handler_Task(void *pvParameters);
+void Emergency_Task(void *pvParameters);
 
-void Motor_Down(void);
-void Motor_Up(void);
-
-typedef enum {
-    PASS_DOWN_BUTTON,
-    PASS_UP_BUTTON,
-    DRIVER_UP_BUTTON,
-    DRIVER_DOWN_BUTTON,
-    LIMIT_UP_BUTTON,
-    LIMIT_DOWN_BUTTON,
-    LOCK_ON,
-    LOCK_OFF,
-    JAM
-} event_t;
-
-typedef enum {
-    NEUTRAL,
-    PASS_DOWN,
-    PASS_UP,
-    DRIVER_DOWN,
-    DRIVER_UP,
-    EMERGENCY
-} state_t;
-
-uint8_t debounce(uint8_t current)
-{
-    static uint8_t asserted = 0x00;
-    static uint8_t previous = 0x00;
-    /*
-    * Compare the current and previous states of each input.
-    */
-    asserted |= (previous & current); // Assert newly "on" inputs.
-    asserted &= (previous | current); // Clear newly "off" inputs.
-    /*
-    * Update the history.
-    */
-    previous = current;
-    /*
-    * Return the debounced inputs to the caller.
-    */
-    return (asserted);
-}
+void Motor_Clockwise(void);
+void Motor_Counter_Clockwise(void);
 
 void uart_init(uint32_t baudrate) 
 {
@@ -196,7 +214,6 @@ void print_string(const char *str)
     while (*str) {
         print_char(*(str++));
     }
-    print_char('\n');
 }
 
 char read_char(void) 
@@ -218,7 +235,7 @@ void vPrintString(const char *pcString)
 }
 
 void gpio_init(void)   // Port F pin 4
-{
+{    
     SYSCTL->RCGCGPIO |= 0X20;                // Enable clock to PORTF
     while ((SYSCTL->PRGPIO & 0X20) == 0) ;   // Wait until it is enabled
 
@@ -231,11 +248,6 @@ void gpio_init(void)   // Port F pin 4
     GPIOF->DEN |= 0X1FU;            // PORTF4-0 digital pins
     GPIOF->PUR |= 0x11U;            // enable pull up for PORTF4, 0
 
-    GPIOF->IS  &= ~0x11U;           // make bit 4, 0 edge sensitive
-    GPIOF->IBE &= ~0x11U;           // use IEV (not both edges)
-    GPIOF->IEV &= ~0x11U;           // falling edge trigger
-    GPIOF->ICR |= 0x11U;            // clear any prior interrupt
-    GPIOF->IM  |= 0x11U;            // unmask interrupt
     
     SYSCTL->RCGCGPIO |= 0x02;
     while ((SYSCTL->PRGPIO & 0X02) == 0); 
@@ -245,6 +257,12 @@ void gpio_init(void)   // Port F pin 4
     GPIOB->DIR &= ~0xFFU;                   // All input.
     GPIOB->DEN |= 0XFFU;                    // digital pins
     GPIOB->PUR |= 0xFFU;                    // enable pull up
+    
+    GPIOB->IS  &= ~0x40U;           // make bit 6 edge sensitive
+    GPIOB->IBE &= ~0x40U;           // use IEV (not both edges)
+    GPIOB->IEV &= ~0x40U;           // falling edge trigger
+    GPIOB->ICR |= 0x40U;            // clear any prior interrupt
+    GPIOB->IM  |= 0x40U;            // unmask interrupt
 
 
     SYSCTL->RCGCGPIO |= 0x04;
@@ -256,60 +274,69 @@ void gpio_init(void)   // Port F pin 4
     GPIOC->DEN |= 0XFFU;                    // digital pins 
 }
 
-void gpiof_handler(void) 
-{
-    volatile uint32_t readback;
-    while (GPIOF->MIS != 0) {
-        if (GPIOF->MIS & 0x01)          // masked interrupt status (detects if masking occurs) sw2
-        {
-            GPIOF->DATA ^= BLUE;        // toggle blue
-            GPIOF->ICR |= 0x01;         // acknowledge flag
-            readback = GPIOF->ICR;
-        } else if (GPIOF->MIS & 0x10)   // masked interrupt status (detects if masking occurs) sw1
-        {
-            GPIOF->DATA ^= GREEN;       // toggle green
-            GPIOF->ICR |= 0x10;         // acknowledge the flag
-            readback = GPIOF->ICR;
-        } else {
-            GPIOF->ICR = GPIOF->MIS;
-            readback = GPIOF->ICR;
-        }
-    }
-}
-
 void interrupt_config(void) 
 {
-    NVIC->IPR[30] |= 3 << 5;   // priority 3 to port F
+    NVIC->IPR[1] |= 3 << 5;   // priority 3 to port B
     
-    // enable IRQ from Port F (IRQ 30 > EN0 bit 30)
-    NVIC->ISER[0] |= 1 << 30;   // enable interrupts for port f
+    // enable IRQ from Port B (IRQ 1 > EN0 bit 1)
+    NVIC->ISER[0] |= 1 << 1;   // enable interrupts for port B
 
     // Enable interrupts
     __enable_irq();
 }
 
-void Motor_Up(void) 
+void GPIOB_Handler(void) 
 {
-    vPrintString("Motor up ... \r\n");
-    vTaskDelay(1000);
-    GPIOF->DATA = BLUE;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    volatile uint32_t readback;
+       
+    GPIOB->ICR  |= 0x40;                   // acknowledge flag
+    readback = GPIOB->ICR;
+    
+    vPrintString("Emergency Interrupt!");
+    emergency = 1;
+
+    xSemaphoreGiveFromISR(Emergency_Semaphore,&xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-void Motor_Down(void)
+void Motor_Counter_Clockwise(void) 
 {
-    vPrintString("Motor Down ... \r\n");
-    vTaskDelay(1000);
-    GPIOF->DATA = RED;
+    static uint32_t counter = 0;
+    if (!(counter%10000)){
+        MOTOR_COUNTER_CLOCKWISE();
+        if(emergency){
+            GPIOF->DATA |= BLUE|RED|GREEN; 
+        }else{
+            GPIOF->DATA = BLUE;
+        }
+        counter = 0;
+    }
+    counter++;
+}
+
+void Motor_Clockwise(void)
+{
+    static uint32_t counter = 0;
+    if (!(counter%10000))
+    {
+        MOTOR_CLOCKWISE();
+        if(emergency){
+            GPIOF->DATA |= BLUE|RED|GREEN; 
+        }else{
+            GPIOF->DATA = RED;
+        }
+        counter = 0;
+    }
+    counter++;
 }
 
 void Input_Handler_Task(void *pvParameters) 
 {
-    event_t event;
-    uint8_t input;
+    event_t event = {0};
     
     for (;;) 
     {
-//        static count = 0;
         static struct ButtonsDebouncing {
             uint32_t depressed;
             uint32_t previous;
@@ -318,67 +345,38 @@ void Input_Handler_Task(void *pvParameters)
         uint32_t current;
         uint32_t tmp;
 
-        current = ~GPIO_READ_PORT(B);
+        current = ~GPIO_READ_PORT(INPUT_PORT);
 
-        tmp = buttons.depressed;                            /* save the debounced depressed buttons */
+        tmp = buttons.depressed;                            
 
-        buttons.depressed |= (buttons.previous & current);  /* set depressed */
-        buttons.depressed &= (buttons.previous | current);  /* clear released */
-        buttons.previous   = current;                       /* update the history */
-        tmp ^= buttons.depressed;                           /* changed debounced depressed */
+        buttons.depressed |= (buttons.previous & current);  
+        buttons.depressed &= (buttons.previous | current); 
+        buttons.previous   = current;                       
+        tmp ^= buttons.depressed;                           
 
         if(READ_BIT(tmp, PASS_UP_PIN)){
             if((READ_BIT(buttons.depressed, PASS_UP_PIN))){
-//                snprintf(buffer, 256, "count = %d \r\n",count++);
-//                vPrintString(buffer);
-                event = PASS_UP_BUTTON;
+                event.sig = PASS_UP_BUTTON;
                 if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
                     vPrintString("error\n");
             }
         }else if(READ_BIT(tmp , PASS_DOWN_PIN)){
             if((READ_BIT(buttons.depressed , PASS_DOWN_PIN))){
-                event = PASS_DOWN_BUTTON;
+                event.sig = PASS_DOWN_BUTTON;
                 if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
                     vPrintString("error\n");
             }
 
         }else if(READ_BIT(tmp, DRIVER_UP_PIN)){
             if((READ_BIT(buttons.depressed, DRIVER_UP_PIN))){
-                event = DRIVER_UP_BUTTON;
+                event.sig = DRIVER_UP_BUTTON;
                 if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
                     vPrintString("error\n");
             }
 
         }else if(READ_BIT(tmp, DRIVER_DOWN_PIN)){
             if((READ_BIT(buttons.depressed, DRIVER_DOWN_PIN))){
-                event = DRIVER_DOWN_BUTTON;
-                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-                    vPrintString("error\n");
-            }
-            
-        }else if(READ_BIT(tmp, LIMIT_UP_PIN)){
-            if((READ_BIT(buttons.depressed, LIMIT_UP_PIN))){
-                event = LIMIT_UP_BUTTON;
-                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-                    vPrintString("error\n");
-            }
-            
-        }else if(READ_BIT(tmp, LIMIT_DOWN_PIN)){
-            if((READ_BIT(buttons.depressed, LIMIT_DOWN_PIN))){
-                event = LIMIT_UP_BUTTON;
-                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-                    vPrintString("error\n");
-            }
-            
-        }else if(READ_BIT(tmp, JAM_PIN)){
-            if((READ_BIT(buttons.depressed, LIMIT_DOWN_PIN))){
-                event = JAM;
-                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-                    vPrintString("error\n");
-            }
-        }else if(READ_BIT(tmp, LOCK_ON_PIN)){
-            if((READ_BIT(buttons.depressed, LOCK_ON_PIN))){
-                event = LOCK_ON;
+                event.sig = DRIVER_DOWN_BUTTON;
                 if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
                     vPrintString("error\n");
             }
@@ -391,7 +389,7 @@ void Input_Handler_Task(void *pvParameters)
 
 void Event_Handler_Task(void *pvParameters) 
 {
-    event_t event;
+    event_t event = {0};
     state_t state = NEUTRAL;
 
     for (;;) 
@@ -401,92 +399,55 @@ void Event_Handler_Task(void *pvParameters)
             switch (state) 
             {
                 case NEUTRAL: {
-                    // vPrintString("State : NEUTRAL\r\n");
-                    switch (event) {
+                    switch (event.sig){
                         case PASS_DOWN_BUTTON:
-                            if(!LOCK_ON_PRESSED) {// Lock not pressed
-                                // vTimerSetTimerID(xOneShotTimer, (void *) DOWN_TIMER);
-                                // xTimerStart(xOneShotTimer, 0);
+                            if(!LOCK_ON_PRESSED) {  
                                 state = PASS_DOWN;
-                                event = PASS_DOWN_BUTTON;
+                                vTimerSetTimerID(xOneShotTimer, (void *) PASS_DOWN_TIMER);
+                                xTimerStart(xOneShotTimer, 0);
                             }
-//                                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                    vPrintString("error\n");
                             break;
+
                         case PASS_UP_BUTTON:
-                            if(!LOCK_ON_PRESSED) {// Lock not pressed
+                            if(!LOCK_ON_PRESSED) {  
                                 state = PASS_UP;
-                                event = PASS_UP_BUTTON;
+                                vTimerSetTimerID(xOneShotTimer, (void *) PASS_UP_TIMER);
+                                xTimerStart(xOneShotTimer, 0);
                             }
-//                                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                    vPrintString("error\n");
                             break;
+
                         case DRIVER_UP_BUTTON:
-                            state = DRIVER_UP;      // even if lock is on
-                            event = DRIVER_UP_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
+                                state = DRIVER_UP;
+                                vTimerSetTimerID(xOneShotTimer, (void *) DRIVER_UP_TIMER);
+                                xTimerStart(xOneShotTimer, 0);
                             break;
+
                         case DRIVER_DOWN_BUTTON:
-                            state = DRIVER_DOWN;    // even if lock is on
-                            event = DRIVER_DOWN_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            break;
-                        case JAM:
-                            state = EMERGENCY;
-                            // may open semaphore
+                                state = DRIVER_DOWN;
+                                vTimerSetTimerID(xOneShotTimer, (void *) DRIVER_DOWN_TIMER);
+                                xTimerStart(xOneShotTimer, 0);
                             break;
                         default:
                             break;
                     }
+                    GPIOF->DATA = GREEN; 
                     break;
                 }
                 case PASS_DOWN: {
-                    // vPrintString("State : PASS_DOWN\r\n");
-                    switch (event) {
+                    switch (event.sig) {
                         case PASS_DOWN_BUTTON:
-                            vTaskDelay(100);    // Delay for a little bit 
-
-                            if (!PASS_DOWN_PRESSED){ // passenger down not clicked anymore
-                                // Auto mode
-                                while (NO_INPUT) {
-                                    Motor_Down();
+                            if (event.flag == AUTOMATIC_FLAG){ 
+                                while (PASS_DOWN_AUTO_COND) {
+                                    Motor_Clockwise();
                                 }
                             } else {
-                                // Manual mode
-                                while(PASS_DOWN_ONLY){
-                                    Motor_Down();
+                                while(PASS_DOWN_MANUAL_COND){
+                                    Motor_Clockwise();
                                 }
                             }
+                            emergency = 0;
+                            MOTOR_STOP();
                             state = NEUTRAL;
-                            break;
-                        case PASS_UP_BUTTON:
-                            state = PASS_UP;
-                            event = PASS_UP_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            
-                            break;
-                        case DRIVER_UP_BUTTON:
-                            state = DRIVER_UP;
-                            event = DRIVER_UP_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            
-                            break;
-                        case DRIVER_DOWN_BUTTON:
-                            state = DRIVER_DOWN;
-                            event = DRIVER_DOWN_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            
-                            break;
-                        case LOCK_ON:
-                            state = NEUTRAL;
-                            break;
-                        case JAM:
-                            state = EMERGENCY;
                             break;
                         default:
                             break;
@@ -494,44 +455,20 @@ void Event_Handler_Task(void *pvParameters)
                     break;
                 }
                 case PASS_UP: {
-                    switch (event) {
-                        case PASS_DOWN_BUTTON:
-                            state = PASS_DOWN;
-                            break;
+                    switch (event.sig) {
                         case PASS_UP_BUTTON:
-                            vTaskDelay(100);    // Delay for a little bit 
-
-                            if (!PASS_UP_PRESSED){ // passenger down not clicked anymore
-                                // Auto mode
-                                while (NO_INPUT) {
-                                    Motor_Up();
+                            if (event.flag == AUTOMATIC_FLAG){ 
+                                while (PASS_UP_AUTO_COND) {
+                                    Motor_Counter_Clockwise();
                                 }
                             } else {
-                                // Manual mode
-                                while(PASS_UP_ONLY){
-                                    Motor_Up();
+                                while(PASS_UP_MANUAL_COND){
+                                    Motor_Counter_Clockwise();
                                 }
                             }
+                            emergency = 0;
+                            MOTOR_STOP();
                             state = NEUTRAL;
-                            break;
-                        case DRIVER_UP_BUTTON:
-                            state = DRIVER_UP;
-                            event = DRIVER_UP_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            
-                            break;
-                        case DRIVER_DOWN_BUTTON:
-                            state = DRIVER_DOWN;
-                            event = DRIVER_DOWN_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");                            
-                            break;
-                        case LOCK_ON:
-                            state = NEUTRAL;
-                            break;
-                        case JAM:
-                            state = EMERGENCY;
                             break;
                         default:
                             break;
@@ -539,114 +476,169 @@ void Event_Handler_Task(void *pvParameters)
                     break;
                 }
                 case DRIVER_DOWN: {
-                    switch (event) {
+                    switch (event.sig) {
                         case DRIVER_DOWN_BUTTON:
-                            vTaskDelay(100);    // Delay for a little bit 
-
-                            if (!DRIVER_DOWN_PRESSED){ // passenger down not clicked anymore
-                                // Auto mode
-                                while (NO_INPUT) {
-                                    Motor_Down();
+                            if (event.flag == AUTOMATIC_FLAG){ 
+                                while (DRIVER_DOWN_AUTO_COND) {
+                                    Motor_Clockwise();
                                 }
                             } else {
-                                // Manual mode
-                                while(DRIVER_DOWN_PRESSED && !JAM_PRESSED){
-                                    Motor_Down();
+                                while(DRIVER_DOWN_MANUAL_COND){
+                                    Motor_Clockwise();
                                 }
                             }
+                            emergency = 0;
+                            MOTOR_STOP();
                             state = NEUTRAL;
-                            break;
-                        case DRIVER_UP_BUTTON:
-                            state = DRIVER_UP;
-                            event = DRIVER_UP_BUTTON;
-//                            if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
-//                                vPrintString("error\n");
-                            break;
-                        case JAM:
-                            state = EMERGENCY;
                             break;
                         default:
                             break;
                     }
                     break;
                 }
+
                 case DRIVER_UP: {
-                    switch (event) {
-                        case DRIVER_DOWN_BUTTON:
-                            state = DRIVER_DOWN;
-                            break;
+                    switch (event.sig) {
                         case DRIVER_UP_BUTTON:
-                            vTaskDelay(100);    // Delay for a little bit 
-
-                            if (!DRIVER_UP_PRESSED){ // passenger down not clicked anymore
-                                // Auto mode
-                                while (NO_INPUT) {
-                                    Motor_Down();
+                            if (event.flag == AUTOMATIC_FLAG){ 
+                                while (DRIVER_UP_AUTO_COND) {
+                                    Motor_Counter_Clockwise();
                                 }
                             } else {
-                                // Manual mode
-                                while(DRIVER_UP_PRESSED && !JAM_PRESSED){
-                                    Motor_Down();
+                                while(DRIVER_UP_MANUAL_COND){
+                                    Motor_Counter_Clockwise();
                                 }
                             }
+                            emergency = 0;
+                            MOTOR_STOP();
                             state = NEUTRAL;
-                            break;
-                        case JAM:
-                            state = EMERGENCY;
                             break;
                         default:
                             break;
                     }
                     break;
                 }
-                case EMERGENCY: {
-                    Motor_Down();
-                    Motor_Down();
-                    state = NEUTRAL;
+                default:
                     break;
-                }
             }
         }
     }
 }
 
 
-static void prvOneShotTimerCallback( TimerHandle_t xTimer )
+static void prvOneShotTimerCallback(TimerHandle_t xTimer)
 {
+    event_t event = {0};
     uint32_t TimerID;
     TimerID = (uint32_t) pvTimerGetTimerID(xTimer);
+    
     switch (TimerID) {
-        case DOWN_TIMER:
-//            if(PASS_DOWN_PRESSED) // still pressed manual mode
-//            else 
-                // automatic
+        case PASS_DOWN_TIMER:
+            if (!PASS_DOWN_PRESSED){ 
+                event.sig = PASS_DOWN_BUTTON;
+                event.flag = AUTOMATIC_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+            } else {
+                event.sig = PASS_DOWN_BUTTON;
+                event.flag = MANUAL_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+            }
             break;
-        case UP_TIMER:
+
+        case PASS_UP_TIMER:
+            if (!PASS_UP_PRESSED){
+                event.sig = PASS_UP_BUTTON;
+                event.flag = AUTOMATIC_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+
+            } else {
+                event.sig = PASS_UP_BUTTON;
+                event.flag = MANUAL_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+            }
+            break;
+
+        case DRIVER_DOWN_TIMER:
+            if (!DRIVER_DOWN_PRESSED){ 
+                event.sig = DRIVER_DOWN_BUTTON;
+                event.flag = AUTOMATIC_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+
+            } else {
+                event.sig = DRIVER_DOWN_BUTTON;
+                event.flag = MANUAL_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+            }
+            break;
+
+        case DRIVER_UP_TIMER:
+            if (!DRIVER_UP_PRESSED){
+                event.sig = DRIVER_UP_BUTTON;
+                event.flag = AUTOMATIC_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+
+            } else {
+                event.sig = DRIVER_UP_BUTTON;
+                event.flag = MANUAL_FLAG;
+                if (xQueueSend(event_queue, (void *) &event, 0) != pdPASS)
+                    vPrintString("error\n");
+            }
             break;
         default:
             break;
     }
 }
 
+void Emergency_Task(void *pvParameters)
+{
+
+	xSemaphoreTake(Emergency_Semaphore, 0);
+    int counter = 0;
+    
+	for( ;; )
+	{
+        
+		xSemaphoreTake(Emergency_Semaphore, portMAX_DELAY);
+        
+        __disable_irq();
+        vPrintString("Jam Detected !!");
+        while(counter < 1000000){
+            Motor_Clockwise();
+            counter ++;
+        }
+        MOTOR_STOP();
+        counter = 0;
+        
+        __enable_irq();
+	}
+}
+
 int main(void) 
-                {
+{
     gpio_init();
     uart_init(115200);
     interrupt_config();
 
-    event_queue = xQueueCreate(10, sizeof(event_t));
+    event_queue = xQueueCreate(3, sizeof(event_t));
+    Emergency_Semaphore = xSemaphoreCreateBinary();
 
-    /* Create the one shot timer, storing the handle to the created timer in xOneShotTimer. */
     xOneShotTimer = xTimerCreate("OneShot",
                                  mainONE_SHOT_TIMER_PERIOD,
                                  pdFALSE,                   // one-shot software timer.
-                                 0,                         // no timer id.
-                                 prvOneShotTimerCallback);  // Callback function to used by timer.
+                                 0,                         // no initial timer id.
+                                 prvOneShotTimerCallback); 
 
 
-
-    xTaskCreate(Input_Handler_Task, "Input Handler", 200, NULL, 1, NULL);
-    xTaskCreate(Event_Handler_Task, "Event Handler", 200, NULL, 2, NULL);
+    xTaskCreate(Input_Handler_Task, "Input Handler", 128, NULL, 1, NULL);
+    xTaskCreate(Event_Handler_Task, "Event Handler", 128, NULL, 2, NULL);
+    xTaskCreate(Emergency_Task, "Emergency Handler", 128, NULL, 3, NULL);
 
     vTaskStartScheduler();
 
